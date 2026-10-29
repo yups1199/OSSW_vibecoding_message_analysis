@@ -1,0 +1,40 @@
+﻿# Python environments and generated artifacts
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+secrets*.json
+
+# Logs, temporary files and local conversation exports
+*.log
+*.tmp
+*.temp
+*.bak
+logs/
+tmp/
+chat-exports/
+uploads/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
