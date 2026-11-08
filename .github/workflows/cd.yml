@@ -77,19 +77,30 @@ jobs:
           "DOCKER_HOST=$endpoint" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           'DOCKER_CONTEXT=' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Log in to Docker Hub with temporary credentials
+      - name: Validate Docker Hub secrets and prepare temporary credentials
         if: steps.guard.outputs.deploy == 'true'
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not $env:DOCKERHUB_USERNAME -or -not $env:DOCKERHUB_TOKEN) { throw 'Required Docker Hub secrets are missing' }
+          if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_USERNAME)) { throw 'Repository secret DOCKERHUB_USERNAME is missing or blank; deployment not started' }
+          if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_TOKEN)) { throw 'Repository secret DOCKERHUB_TOKEN is missing or blank; deployment not started' }
+          if ($env:DOCKERHUB_USERNAME -match '\s') { throw 'DOCKERHUB_USERNAME contains whitespace; correct the Repository Secret without printing its value' }
+          if ($env:DOCKERHUB_TOKEN -match '\s') { throw 'DOCKERHUB_TOKEN contains whitespace or line breaks; re-save the access token as a single line without printing its value' }
           $env:DOCKER_CONFIG = Join-Path $env:RUNNER_TEMP "kakao-docker-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           New-Item -ItemType Directory -Force -Path $env:DOCKER_CONFIG | Out-Null
           "DOCKER_CONFIG=$env:DOCKER_CONFIG" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          $env:DOCKERHUB_TOKEN | docker login --username $env:DOCKERHUB_USERNAME --password-stdin
-          if ($LASTEXITCODE -ne 0) { throw 'Docker Hub login failed; deployment not started' }
+
+      - name: Log in to Docker Hub using the same official action as CI
+        if: steps.guard.outputs.deploy == 'true'
+        uses: docker/login-action@v4.8.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          # The always() cleanup below removes this job's entire temporary config.
+          # Avoid a post-job logout recreating it after that cleanup has run.
+          logout: false
 
       - name: Prepare, validate, switch, stabilize and drain
         if: steps.guard.outputs.deploy == 'true'
