@@ -13,3 +13,10 @@
 !static/index.html
 !static/style.css
 !static/app.js
+!static/docs.html
+!static/docs.js
+!static/vendor/
+!static/vendor/swagger-ui/
+!static/vendor/swagger-ui/swagger-ui-bundle.js
+!static/vendor/swagger-ui/swagger-ui.css
+!static/vendor/swagger-ui/LICENSE

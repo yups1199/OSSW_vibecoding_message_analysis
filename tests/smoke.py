@@ -13,16 +13,9 @@ def check(base, version):
     base = base.rstrip('/')
     # Also wait during standalone use or a transient drop after CI readiness.
     wait_ready(base, version)
-    for path in ('/', '/static/style.css', '/static/app.js', '/api/health'):
+    for path in ('/', '/static/style.css', '/static/app.js', '/api/health', '/docs', '/openapi.json', '/static/docs.js', '/static/vendor/swagger-ui/swagger-ui-bundle.js', '/static/vendor/swagger-ui/swagger-ui.css'):
         with urlopen(base + path, timeout=5) as response:
             assert response.status == 200, path
-    try:
-        urlopen(base + '/docs', timeout=5)
-    except HTTPError as error:
-        with error:
-            assert error.code == 404
-    else:
-        raise AssertionError('/docs should remain disabled')
     sample = '--------------- 2026년 10월 1일 목요일 ---------------\n[가상하늘] [오전 9:00] 프로젝트 회의\n[가상바다] [오전 9:02] 프로젝트 좋아'
     for encoding in ('utf-8-sig', 'cp949'):
         request = Request(base + '/api/analyze', data=sample.encode(encoding), headers={'Content-Type': 'text/plain'})
@@ -38,7 +31,7 @@ def check(base, version):
             assert error.code == 422
     else:
         raise AssertionError('Invalid input should fail')
-    print('PASS: health/version, homepage, static assets, disabled docs, UTF-8/CP949 analysis, invalid input')
+    print('PASS: health/version, homepage, static assets, local Swagger docs, UTF-8/CP949 analysis, invalid input')
 
 if __name__ == '__main__':
     check(sys.argv[1], sys.argv[2])

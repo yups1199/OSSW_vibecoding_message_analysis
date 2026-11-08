@@ -56,14 +56,16 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(response.json(), {'status': 'ok', 'version': APP_VERSION})
         self.assertEqual(self.client.get('/api/health').json(), {'status': 'ok'})
 
-    def test_static_security_and_docs_disabled(self):
-        for path in ('/', '/static/style.css', '/static/app.js'):
+    def test_static_security_and_local_docs(self):
+        for path in ('/', '/static/style.css', '/static/app.js', '/docs', '/openapi.json', '/static/docs.js', '/static/vendor/swagger-ui/swagger-ui-bundle.js', '/static/vendor/swagger-ui/swagger-ui.css'):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.headers['cache-control'], 'no-store')
         self.assertIn("script-src 'self'", self.client.get('/').headers['content-security-policy'])
-        self.assertEqual(self.client.get('/docs').status_code, 404)
+        self.assertEqual(self.client.get('/docs').status_code, 200)
+        self.assertNotIn('https://', self.client.get('/docs').text)
+        self.assertIn('/api/analyze', self.client.get('/openapi.json').json()['paths'])
 
 if __name__ == '__main__':
     unittest.main()

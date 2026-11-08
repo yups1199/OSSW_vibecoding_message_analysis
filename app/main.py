@@ -11,12 +11,14 @@ logger = logging.getLogger('kakao')
 ROOT = Path(__file__).resolve().parent.parent
 MAX_BYTES = 5 * 1024 * 1024
 APP_VERSION = os.getenv('APP_VERSION', 'local')
-app = FastAPI(title='대화의 온도', docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='대화의 온도', docs_url=None, redoc_url=None)
 
 @app.middleware('http')
 async def security_headers(request, call_next):
     response = await call_next(request)
     response.headers.update({'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"})
+    if request.url.path == '/docs':
+        response.headers['Content-Security-Policy'] = response.headers['Content-Security-Policy'].replace("img-src 'self'", "img-src 'self' data:")
     return response
 
 @app.exception_handler(RequestValidationError)
@@ -33,6 +35,10 @@ async def unexpected_error(request, exc):
 def index():
     return FileResponse(ROOT / 'static' / 'index.html')
 
+@app.get('/docs', include_in_schema=False)
+def docs():
+    return FileResponse(ROOT / 'static' / 'docs.html')
+
 @app.get('/api/health')
 def health():
     return {'status': 'ok'}
@@ -41,7 +47,7 @@ def health():
 def deployment_health():
     return {'status': 'ok', 'version': APP_VERSION}
 
-@app.post('/api/analyze')
+@app.post('/api/analyze', openapi_extra={'requestBody': {'required': True, 'content': {'text/plain': {'schema': {'type': 'string'}}}}})
 async def analyze_input(request: Request):
     content_type = request.headers.get('content-type', '').split(';')[0].lower()
     if content_type != 'text/plain':

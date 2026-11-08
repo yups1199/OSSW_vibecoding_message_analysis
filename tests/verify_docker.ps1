@@ -1,4 +1,4 @@
-# Run manually from PowerShell after Docker Desktop is available.
+﻿# Run manually from PowerShell after Docker Desktop is available.
 # Only the container created by this script is removed. No registry push.
 param([string]$Python = '.\.venv\Scripts\python.exe')
 
@@ -44,7 +44,7 @@ try {
 
     docker exec $containerId python -m pip check
     if ($LASTEXITCODE -ne 0) { throw 'Container dependencies failed validation.' }
-    $fileCheck = "from pathlib import Path; import os; expected={'requirements.txt','run.py','app/__init__.py','app/main.py','app/analysis.py','static/index.html','static/style.css','static/app.js'}; actual={p.relative_to('/service').as_posix() for p in Path('/service').rglob('*') if p.is_file()}; assert actual==expected, actual; assert os.getuid()==10001; print('PASS: non-root UID and exact runtime file allowlist')"
+    $fileCheck = "from pathlib import Path; import os; expected={'requirements.txt','run.py','app/__init__.py','app/main.py','app/analysis.py','static/index.html','static/style.css','static/app.js','static/docs.html','static/docs.js','static/vendor/swagger-ui/swagger-ui-bundle.js','static/vendor/swagger-ui/swagger-ui.css','static/vendor/swagger-ui/LICENSE'}; actual={p.relative_to('/service').as_posix() for p in Path('/service').rglob('*') if p.is_file()}; assert actual==expected, actual; assert os.getuid()==10001; print('PASS: non-root UID and exact runtime file allowlist')"
     docker exec $containerId python -c $fileCheck
     if ($LASTEXITCODE -ne 0) { throw 'Image file/user check failed.' }
     Write-Host 'PASS: build, HTTP/version/API/static, Docker health, dependencies and image contents'

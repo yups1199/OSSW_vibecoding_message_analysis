@@ -4,6 +4,8 @@
 
 ## 프로젝트 루트와 구성
 
+로컬 CD와 Nginx Blue-Green 설정은 [deploy/README.md](deploy/README.md), 이번 단계의 검증 결과는 [CD_VALIDATION.md](CD_VALIDATION.md)를 참조하세요. 아래 초기 CI 구축 기록과 달리 현재 `/docs`는 로컬 Swagger 자산으로 활성화했고 별도 CD workflow를 추가했습니다.
+
 이 README와 `.git`이 있는 **upload 폴더가 실제 개발 저장소의 루트**입니다. 상위 폴더는 이전 과제 보관용이며 빌드·테스트에 필요하지 않습니다. 아래 모든 명령은 이 README가 있는 폴더에서 실행합니다.
 
 ```text
@@ -66,7 +68,8 @@ Linux/macOS는 `python3 -m venv .venv` 후 `.venv/bin/python`으로 같은 명�
 | `GET /health` | HTTP 200, `{"status":"ok","version":"..."}` |
 | `GET /api/health` | 기존 호환 경로, `{"status":"ok"}` 유지 |
 | `POST /api/analyze` | `Content-Type: text/plain` 요청 본문으로 분석 |
-| `GET /docs` | 기존 설정 유지: Swagger 비활성화로 HTTP 404 |
+| `GET /docs` | 로컬 자산을 사용하는 Swagger UI, HTTP 200 |
+| `GET /openapi.json` | FastAPI API 스키마 |
 
 파일 업로드도 multipart 임시파일 대신 TXT 파일 바이트를 `text/plain` 본문으로 전송합니다. `session_minutes=30`, `60`, `180` 쿼리 옵션을 지원합니다. 잘못된 형식은 422, 잘못된/빈 텍스트는 400, 크기 초과는 413, 지원하지 않는 Content-Type은 415를 반환합니다.
 
@@ -85,7 +88,7 @@ Invoke-RestMethod http://127.0.0.1:18080/health
 Invoke-RestMethod http://127.0.0.1:18081/health
 ```
 
-이는 후속 CD/Blue-Green 검증을 위한 인터페이스이며 이번 단계에는 전환·재배포 로직이 없습니다.
+CD는 이 인터페이스로 신규 앱과 Nginx 프록시의 실제 배포 버전을 확인합니다. 배포 절차는 deploy/README.md를 참조하세요.
 
 ## Docker 이미지 빌드와 로컬 검증
 
@@ -111,12 +114,12 @@ docker rm -f kakao-local-check
 
 ## GitHub Actions CI 구조
 
-`.github/workflows/ci.yml`의 표시 이름은 **CI - Test and publish Docker image**입니다. `main` 브랜치 push에만 반응하며 Pull Request 이벤트, self-hosted runner, CD는 설정하지 않았습니다. GitHub-hosted `ubuntu-24.04`를 사용하고 GitHub 토큰 권한은 `contents: read`로 제한합니다.
+`.github/workflows/ci.yml`의 표시 이름은 **CI - Test and publish Docker image**입니다. CI는 `main` push에서 GitHub-hosted `ubuntu-24.04`를 사용하며 토큰 권한은 `contents: read`입니다. 별도 cd.yml이 정상 CI 완료를 받아 Windows Self-hosted Runner에서 배포합니다. PR 이벤트는 어느 배포 경로에서도 실행하지 않습니다.
 
 1. 소스 checkout(자격정보 유지 끔), Python 3.12.12 준비
 2. `requirements-dev.txt` 설치, 의존성 검사 및 합성 데이터 API/파서 테스트
 3. Buildx로 이미지를 한 번 빌드해 로컬 runner에 load (아직 push 안 함)
-4. 같은 이미지로 컨테이너 실행 → 별도 HTTP Readiness Check → Smoke Test로 `/health`의 커밋 버전, 홈/정적 파일, UTF-8/CP949 분석, 오류 응답, `/docs` 404 검사
+4. 같은 이미지로 컨테이너 실행 → 별도 HTTP Readiness Check → Smoke Test로 `/health`의 커밋 버전, 홈/정적 파일, UTF-8/CP949 분석, 오류 응답, `/docs`와 OpenAPI 및 로컬 Swagger 자산 검사
 5. Docker HEALTHCHECK가 `healthy`인지 확인 후 테스트 컨테이너 정리
 6. 앞 단계가 성공한 경우에만 Docker Hub 로그인
 7. 검증한 같은 로컬 이미지에 SHA/latest 태그를 붙이고 순서대로 push
@@ -180,7 +183,7 @@ git push origin main
 
 원문·참여자·파일명을 서버 로그에 기록하지 않고 Uvicorn 접근 로그도 끕니다. 파일/DB/브라우저 저장소를 사용하지 않지만 프로세스 메모리의 암호학적 즉시 소거를 보장하지는 않습니다. 결과에는 이름과 단어가 포함될 수 있으므로 공유 전 확인하세요. 로컬에서는 로컬 서버로, 배포 후에는 배포 서버로 대화가 전송됩니다. 테스트에는 합성 데이터만 사용합니다.
 
-공개 운영 시 HTTPS, 접근 제어와 전체 동시 요청/요청 빈도 제한은 운영 환경에서 별도로 준비하세요. 이번 단계는 Docker 패키징과 CI까지이며 GitHub Secrets 변경, 원격 업로드, self-hosted runner, 클라우드 배포, CD workflow, Blue-Green 전환은 수행하지 않습니다.
+공개 운영 시 HTTPS, 접근 제어와 전체 동시 요청/요청 빈도 제한은 별도로 준비하세요. 이번 CD는 로컬 PC의 127.0.0.1에만 프록시를 노출합니다. GitHub Secrets 변경, 원격 업로드, Runner 설치나 클라우드 배포는 도구가 수행하지 않았습니다.
 
 ## 아직 필요한 수동 검증 (승인 시스템 오류 이후)
 

@@ -38,3 +38,13 @@ uploads/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Deployment state and runner credentials must never be committed
+.deploy-state/
+actions-runner/
+.runner
+.credentials*
+.service
+_work/
+_diag/
+.docker/
