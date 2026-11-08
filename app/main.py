@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -9,6 +10,7 @@ from app.analysis import analyze
 logger = logging.getLogger('kakao')
 ROOT = Path(__file__).resolve().parent.parent
 MAX_BYTES = 5 * 1024 * 1024
+APP_VERSION = os.getenv('APP_VERSION', 'local')
 app = FastAPI(title='대화의 온도', docs_url=None, redoc_url=None, openapi_url=None)
 
 @app.middleware('http')
@@ -34,6 +36,10 @@ def index():
 @app.get('/api/health')
 def health():
     return {'status': 'ok'}
+
+@app.get('/health')
+def deployment_health():
+    return {'status': 'ok', 'version': APP_VERSION}
 
 @app.post('/api/analyze')
 async def analyze_input(request: Request):

@@ -1,0 +1,15 @@
+# Allowlist: all local files, secrets, exports, .git/.venv, tests, caches,
+# logs and screenshots are excluded unless explicitly allowed below.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!run.py
+!app/
+!app/__init__.py
+!app/main.py
+!app/analysis.py
+!static/
+!static/index.html
+!static/style.css
+!static/app.js
