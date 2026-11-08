@@ -5,30 +5,22 @@ Only Python's standard library is required.
 """
 import json
 import sys
-import time
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from wait_ready import wait_ready
 
 def check(base, version):
     base = base.rstrip('/')
-    for attempt in range(60):
-        try:
-            with urlopen(base + '/health', timeout=2) as response:
-                health = json.load(response)
-                assert response.status == 200
-            assert health == {'status': 'ok', 'version': version}, health
-            break
-        except (URLError, TimeoutError):
-            if attempt == 59:
-                raise
-            time.sleep(1)
+    # Also wait during standalone use or a transient drop after CI readiness.
+    wait_ready(base, version)
     for path in ('/', '/static/style.css', '/static/app.js', '/api/health'):
         with urlopen(base + path, timeout=5) as response:
             assert response.status == 200, path
     try:
         urlopen(base + '/docs', timeout=5)
     except HTTPError as error:
-        assert error.code == 404
+        with error:
+            assert error.code == 404
     else:
         raise AssertionError('/docs should remain disabled')
     sample = '--------------- 2026년 10월 1일 목요일 ---------------\n[가상하늘] [오전 9:00] 프로젝트 회의\n[가상바다] [오전 9:02] 프로젝트 좋아'
@@ -42,7 +34,8 @@ def check(base, version):
     try:
         urlopen(Request(base + '/api/analyze', data=b'invalid', headers={'Content-Type': 'text/plain'}), timeout=5)
     except HTTPError as error:
-        assert error.code == 422
+        with error:
+            assert error.code == 422
     else:
         raise AssertionError('Invalid input should fail')
     print('PASS: health/version, homepage, static assets, disabled docs, UTF-8/CP949 analysis, invalid input')

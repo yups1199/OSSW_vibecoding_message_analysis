@@ -49,3 +49,35 @@
 3. `tests/verify_docker.ps1`을 직접 실행하고 결과를 확인합니다. 스크립트는 새 고유 이름과 임시 포트를 사용하며 자기 컨테이너만 정리합니다. Docker 실행 검증 전이므로 오류가 나면 출력 그대로 전달하세요.
 4. 정상 확인 후 직접 Git commit/push합니다.
 5. GitHub Actions 각 단계, Docker Hub SHA/latest 태그와 권한을 확인합니다. 이 단계가 완료돼야 원격 CI 게시 성공이라고 볼 수 있습니다.
+
+## Readiness 수정 후 검증 (2026-11-08)
+
+이 항목은 위 초기 구축 기록 이후의 수정 결과입니다. Git 명령과 Docker 작업은 이번 수정에서 실행하지 않았습니다. 기존 승인 시스템 오류와 사용자 지침에 따라 Docker 검증은 수동 실행 절차를 유지합니다.
+
+### 발견한 사실과 원인 판단
+
+- 기존 CI는 `docker run -d` 바로 뒤 Smoke Test를 실행하고, Docker HEALTHCHECK 대기는 그 뒤에 있었습니다.
+- 기존 smoke의 재시도는 URLError/TimeoutError만 처리하므로 직접 발생하는 ConnectionResetError는 즉시 실패했습니다. 해당 예외를 주입한 회귀 테스트로 수정 후 재시도 성공을 확인했습니다.
+- Dockerfile HOST=0.0.0.0, PORT=8000, run.py의 환경 변수 사용, CI의 127.0.0.1:8000:8000 매핑은 정적으로 일치합니다.
+- 오류가 실제 Uvicorn 시작 경쟁인지 컨테이너 crash/리소스 오류인지는 당시 실행 로그가 없으므로 미확정입니다. 포트 설정 오류의 증거도 현재 파일에서는 발견하지 못했습니다.
+
+### 변경
+
+- tests/wait_ready.py: 최대 30회, 요청당 3초, 간격 1초. 실제 HTTP 200 + status/version 검사. 연결 리셋/거절/타임아웃/HTTP 전송 오류 재시도. 한도 초과 시 실패와 원인 예외 보존. JSON/버전 오류는 즉시 실패.
+- tests/smoke.py: 공통 readiness 사용. UTF-8/CP949 분석 및 응답 시간, 정적 파일, 기존 health와 /docs 404 검사 유지. HTTPError 응답 자원 해제.
+- ci.yml: Smoke 전에 독립 Readiness 단계. 실패 시 docker ps -a, State/Healthcheck 이력, 포트, 최근 로그를 정리 전에 출력. 실패하면 로그인/push는 건너뜀.
+- tests/test_readiness.py: 연결 리셋→503→성공, 연결 끊김/타임아웃/거절, 한도 초과, 버전 오류, 잘못된 JSON, 비200 응답, 실제 HTTP 503→200을 검증.
+- Dockerfile, run.py, app 코드, 기존 Secrets와 분석/UI는 변경하지 않았습니다.
+
+### 실제 로컬 결과
+
+- unittest 14개 모두 통과 (기존 서비스 7 + readiness 7). ResourceWarning을 오류로 설정한 재실행에서도 경고 없이 통과.
+- 실제 Uvicorn/FastAPI를 같은 Python 프로세스 안의 제어 가능한 서버 스레드로 실행하고 Smoke Test 통과: /health/version, 홈/정적 파일, /docs 404, UTF-8/CP949 분석, 잘못된 입력 422.
+- 이번에 생성한 Uvicorn 스레드와 HTTP 테스트 서버를 종료·join하고, Uvicorn 테스트 포트 51839에 더 이상 TCP 연결이 되지 않음을 확인. 초기 구축 때 남았을 가능성이 있는 별도 프로세스의 상태까지 확인한 것은 아닙니다.
+- YAML 파싱 및 단계 순서·실패 진단·권한·실행 조건 정적 검사 결과는 아래 최종 검사로 확인.
+
+### 남은 확인
+
+- Docker 컨테이너에서의 재현/수정 후 성공과 GitHub Actions 원격 실행은 미검증입니다. 이번 변경은 테스트 도구/CI만 변경하여 이미지의 서비스 코드는 기존과 동일합니다.
+- 사용자가 push한 후 Readiness의 READY 로그(HTTP 200, 예상 SHA 버전), Smoke PASS, Docker healthy, 로그인/push 순서와 Docker Hub 태그를 확인해야 합니다.
+- 실패 시 진단 그룹의 컨테이너 State 및 Uvicorn 로그를 전달하면 crash/포트/시작 경쟁 여부를 추가 판별할 수 있습니다.

@@ -16,6 +16,8 @@
 ├── static/                  # index.html, style.css, app.js
 ├── tests/
 │   ├── test_service.py      # 합성 데이터 기반 unittest + FastAPI TestClient
+│   ├── test_readiness.py    # 연결 리셋·재시도·실패 조건 회귀 테스트
+│   ├── wait_ready.py        # 제한된 HTTP 준비 대기 및 버전 확인
 │   ├── smoke.py             # 실제 서버/컨테이너 HTTP 검증 (표준 라이브러리)
 │   └── verify_docker.ps1    # 사용자가 실행하는 Docker 전체 검증·정리 스크립트
 ├── Dockerfile
@@ -114,12 +116,23 @@ docker rm -f kakao-local-check
 1. 소스 checkout(자격정보 유지 끔), Python 3.12.12 준비
 2. `requirements-dev.txt` 설치, 의존성 검사 및 합성 데이터 API/파서 테스트
 3. Buildx로 이미지를 한 번 빌드해 로컬 runner에 load (아직 push 안 함)
-4. 같은 이미지로 컨테이너 실행 → `/health`의 커밋 버전, 홈/정적 파일, UTF-8/CP949 분석, 오류 응답, `/docs` 404 검사
+4. 같은 이미지로 컨테이너 실행 → 별도 HTTP Readiness Check → Smoke Test로 `/health`의 커밋 버전, 홈/정적 파일, UTF-8/CP949 분석, 오류 응답, `/docs` 404 검사
 5. Docker HEALTHCHECK가 `healthy`인지 확인 후 테스트 컨테이너 정리
 6. 앞 단계가 성공한 경우에만 Docker Hub 로그인
 7. 검증한 같은 로컬 이미지에 SHA/latest 태그를 붙이고 순서대로 push
 
-테스트·빌드·HTTP 검증·HEALTHCHECK 중 실패하면 정상 실행 경로의 로그인/push 단계가 건너뛰어져 게시하지 않습니다. 실패 시 컨테이너 로그를 표시하고 정리는 `always()`로 시도합니다. 게시 중 레지스트리/네트워크 오류가 나면 CI가 실패하며, 두 태그의 push는 원자적이지 않아 SHA 태그만 먼저 올라갈 수 있습니다. 최종 성공 여부는 Actions 로그와 Docker Hub를 함께 확인하세요. 동일 브랜치의 게시 작업은 concurrency 그룹으로 동시 실행을 제한합니다.
+테스트·빌드·HTTP 검증·HEALTHCHECK 중 실패하면 정상 실행 경로의 로그인/push 단계가 건너뛰어져 게시하지 않습니다. 실패 진단 단계는 정리 전에 `docker ps -a`, 컨테이너 State(종료 코드/OOM/Healthcheck 이력), 포트와 최근 로그를 표시하고 정리는 `always()`로 시도합니다. 진단 명령의 `|| true`는 진단 대상이 없는 경우에만 대비하며 원래 검증 실패를 성공으로 바꾸지 않습니다. 게시 중 레지스트리/네트워크 오류가 나면 CI가 실패하며, 두 태그의 push는 원자적이지 않아 SHA 태그만 먼저 올라갈 수 있습니다. 최종 성공 여부는 Actions 로그와 Docker Hub를 함께 확인하세요. 동일 브랜치의 게시 작업은 concurrency 그룹으로 동시 실행을 제한합니다.
+
+### HTTP Readiness와 시작 오류 진단
+
+`docker run -d`는 Uvicorn이 요청을 받을 준비가 끝났다는 보장이 아닙니다. CI는 `tests/wait_ready.py`로 `/health`를 최대 30회 요청하며 요청당 타임아웃 3초, 실패 사이 간격 1초를 적용합니다. 고정 시간만 기다리는 대신 HTTP 200, `status=ok`, 예상 `APP_VERSION`을 확인한 경우에만 다음 단계로 갑니다. 버전 불일치나 잘못된 JSON은 즉시 실패합니다. Smoke Test도 같은 함수를 사용하므로 독립 실행 시와 단계 사이의 일시적인 연결 오류에 대응합니다. 분석 API 등 나머지 Smoke 검증은 생략하거나 실패를 무시하지 않습니다.
+
+```powershell
+.\.venv\Scripts\python.exe tests/wait_ready.py http://127.0.0.1:18080 local-check --attempts 30 --timeout 3 --interval 1
+.\.venv\Scripts\python.exe tests/smoke.py http://127.0.0.1:18080 local-check
+```
+
+기존 재시도는 URLError/TimeoutError만 처리하여 직접 발생한 ConnectionResetError에서 즉시 중단되는 결함이 있었습니다. 현재는 연결 리셋·거절·타임아웃과 HTTP 전송 오류도 제한 내에서 재시도하고, 한도 초과 시 마지막 예외를 원인으로 남겨 실패합니다. 다만 ConnectionResetError 자체만으로 실제 원인이 시작 경쟁인지 컨테이너 종료인지 확정할 수는 없습니다. 실패하면 Actions의 진단 그룹에서 Uvicorn 시작/오류 로그, 컨테이너 종료 코드, OOMKilled, Healthcheck 결과와 포트 매핑을 함께 확인하세요.
 
 공식 릴리스 조회 후 사용한 버전:
 
@@ -154,7 +167,7 @@ GitHub 저장소 **Settings → Secrets and variables → Actions → Repository
 ```powershell
 git status
 git branch --show-current
-git add app/main.py requirements.txt requirements-dev.txt Dockerfile .dockerignore .github/workflows/ci.yml tests/test_service.py tests/smoke.py tests/verify_docker.ps1 README.md CI_VALIDATION.md
+git add app/main.py requirements.txt requirements-dev.txt Dockerfile .dockerignore .github/workflows/ci.yml tests/test_service.py tests/test_readiness.py tests/wait_ready.py tests/smoke.py tests/verify_docker.ps1 README.md CI_VALIDATION.md
 git diff --cached --stat
 git diff --cached
 git commit -m "Add Docker packaging and verified Docker Hub CI"
