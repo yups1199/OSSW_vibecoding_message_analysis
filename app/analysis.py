@@ -79,6 +79,14 @@ def analyze(text, session_minutes=30):
         previous = message
     begin, end = messages[0]['at'], messages[-1]['at']
     span = (end.date() - begin.date()).days + 1
+    peak_count = max(weekdays.values())
+    peak_indexes = [i for i in range(7) if weekdays[i] == peak_count]
+    busiest_weekday = dict(
+        weekday_indexes=peak_indexes,
+        labels=[('월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일')[i] for i in peak_indexes],
+        message_count=peak_count,
+        ratio=round(peak_count / len(messages) * 100, 2),
+    )
     # Bound chart size even for very long exports; active dates remain accurate.
     daily = [{'label': (begin.date() + timedelta(days=i)).isoformat(), 'value': days[(begin.date() + timedelta(days=i)).isoformat()]} for i in range(span)] if span <= 3660 else [{'label': k, 'value': v} for k, v in sorted(days.items())]
     return dict(total=len(messages), participant_count=len(users), active_days=len(days), start=begin.isoformat(), end=end.isoformat(),
@@ -87,4 +95,5 @@ def analyze(text, session_minutes=30):
                 weekdays=[dict(label=label, value=weekdays[i]) for i, label in enumerate('월화수목금토일')],
                 words=[dict(label=w, value=n) for w, n in words.most_common(20)], phrases=[dict(label=w, value=n) for w, n in phrases.most_common(10)],
                 replies=[dict(responder=a, to=b, count=len(v), median_seconds=median(v), average_seconds=round(sum(v)/len(v), 1)) for (a,b),v in sorted(replies.items(), key=lambda item: median(item[1]))],
-                sessions=sum(starts.values()), session_minutes=session_minutes, ignored_lines=ignored, invalid_lines=invalid)
+                sessions=sum(starts.values()), session_minutes=session_minutes, ignored_lines=ignored, invalid_lines=invalid,
+                busiest_weekday=busiest_weekday)

@@ -77,6 +77,12 @@ jobs:
           "DOCKER_HOST=$endpoint" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           'DOCKER_CONTEXT=' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Select a unique HTTP evidence directory
+        if: steps.guard.outputs.deploy == 'true'
+        run: |
+          $evidence = Join-Path $env:RUNNER_TEMP "kakao-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          "KAKAO_EVIDENCE_DIR=$evidence" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Validate Docker Hub secrets and prepare temporary credentials
         if: steps.guard.outputs.deploy == 'true'
         env:
@@ -102,13 +108,28 @@ jobs:
           # Avoid a post-job logout recreating it after that cleanup has run.
           logout: false
 
-      - name: Prepare, validate, switch, stabilize and drain
+      - name: Monitor before, during and after Blue-Green deployment
         if: steps.guard.outputs.deploy == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          & .\deploy\Deploy.ps1 -Repository $env:DEPLOY_REPOSITORY -CommitSha $env:CI_SHA -CiRunId ([long]$env:CI_RUN_ID) -CiRunNumber ([long]$env:CI_RUN_NUMBER) -ImageName $env:IMAGE_NAME
+          & .\deploy\Invoke-MonitoredDeploy.ps1 -Repository $env:DEPLOY_REPOSITORY -CommitSha $env:CI_SHA -CiRunId ([long]$env:CI_RUN_ID) -CiRunNumber ([long]$env:CI_RUN_NUMBER) -ImageName $env:IMAGE_NAME
+
+      - name: Preserve independent HTTP observations even on failure
+        if: always() && steps.guard.outputs.deploy == 'true' && env.KAKAO_EVIDENCE_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-http-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.KAKAO_EVIDENCE_DIR }}/requests.csv
+            ${{ env.KAKAO_EVIDENCE_DIR }}/events.jsonl
+            ${{ env.KAKAO_EVIDENCE_DIR }}/summary.json
+            ${{ env.KAKAO_EVIDENCE_DIR }}/summary.md
+            ${{ env.KAKAO_EVIDENCE_DIR }}/started.json
+            ${{ env.KAKAO_EVIDENCE_DIR }}/stopped.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Deployment failure diagnostics
         if: failure()

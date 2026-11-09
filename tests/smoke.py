@@ -24,6 +24,9 @@ def check(base, version):
             assert response.status == 200
             assert (result['total'], result['participant_count']) == (2, 2)
             assert result['replies'][0]['median_seconds'] == 120
+            assert result['busiest_weekday'] == {
+                'weekday_indexes': [3], 'labels': ['목요일'],
+                'message_count': 2, 'ratio': 100.0}
     try:
         urlopen(Request(base + '/api/analyze', data=b'invalid', headers={'Content-Type': 'text/plain'}), timeout=5)
     except HTTPError as error:

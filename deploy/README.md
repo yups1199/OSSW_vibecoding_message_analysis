@@ -2,6 +2,8 @@
 
 실제 저장소는 `.git`이 있는 upload 폴더입니다. 아래 명령은 모두 이 폴더에서 실행합니다. CD는 `.github/workflows/cd.yml`, 구현은 `deploy/Deploy.ps1`, 설정은 `deploy/nginx.conf.template`입니다.
 
+작업 3부터 CD는 `Invoke-MonitoredDeploy.ps1`이 기존 배포를 호출하며 HTTP 모니터를 병행 실행합니다. Before 최소 10초, 전환 후 롤백 게이트 30초, 배포 성공 후 추가 30초를 관측합니다. 판정·Summary/Artifact·제출 순서는 [최신 검증 안내](../TASK3_VALIDATION.md)를 확인하세요.
+
 ## 구조
 
 ```mermaid

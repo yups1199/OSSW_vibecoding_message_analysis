@@ -9,7 +9,10 @@ param(
     [string]$StateDirectory = (Join-Path $env:LOCALAPPDATA 'kakao-chat-analyzer-deploy'),
     [ValidateRange(1,30)][int]$ReadySamples = 3,
     [ValidateRange(1,120)][int]$StabilizeSeconds = 15,
-    [ValidateRange(60,180)][int]$DrainTimeoutSeconds = 75
+    [ValidateRange(60,180)][int]$DrainTimeoutSeconds = 75,
+    [string]$EvidenceDirectory,
+    [scriptblock]$PostSwitchValidation,
+    [object]$ValidationContext
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -26,6 +29,20 @@ $switched = $false
 $initialProxyCreated = $false
 $oldConfig = $null
 $lock = $null
+
+function Record-Deployment([string]$Name,[hashtable]$Data=@{}) {
+    if ($EvidenceDirectory) {
+        $record=@{timestamp_utc=[DateTimeOffset]::UtcNow.ToString('o');name=$Name;data=$Data}
+        [IO.File]::AppendAllText((Join-Path $EvidenceDirectory 'events.jsonl'),(($record|ConvertTo-Json -Depth 6 -Compress)+"`n"),(New-Object Text.UTF8Encoding($false)))
+    }
+}
+function Assert-EvidenceMonitor {
+    if ($EvidenceDirectory) {
+        $heartbeat=Join-Path $EvidenceDirectory 'heartbeat.txt'
+        if (-not (Test-Path $heartbeat) -or ([DateTime]::UtcNow-(Get-Item $heartbeat).LastWriteTimeUtc).TotalSeconds -gt 10 -or (Test-Path (Join-Path $EvidenceDirectory 'stopped.json'))) { throw 'Independent HTTP monitor is absent or stalled' }
+        if (Test-Path (Join-Path $EvidenceDirectory 'failure.marker')) { throw 'Independent HTTP monitor recorded a failed request' }
+    }
+}
 
 function Invoke-Docker {
     param([string[]]$Arguments)
@@ -85,6 +102,7 @@ function Probe-Proxy([string]$Expected) {
     $result = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8000/api/analyze' -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($sample)) -ContentType 'text/plain' -TimeoutSec 10
     $data = $result.Content | ConvertFrom-Json
     if ($result.StatusCode -ne 200 -or $data.total -ne 2 -or $data.participant_count -ne 2) { throw 'Proxy synthetic analysis failed' }
+    if ($data.busiest_weekday.message_count -ne 2 -or $data.busiest_weekday.weekday_indexes[0] -ne 6 -or $data.busiest_weekday.ratio -ne 100) { throw 'New weekday highlight is absent or incorrect' }
 }
 function Worker-Ids {
     $text = (Invoke-Docker -Arguments @('exec',$proxy,'cat','/proc/1/task/1/children') | Out-String).Trim()
@@ -93,6 +111,7 @@ function Worker-Ids {
 function Wait-Drain([string[]]$Ids) {
     $deadline = [DateTime]::UtcNow.AddSeconds($DrainTimeoutSeconds)
     do {
+        Assert-EvidenceMonitor
         $remaining = @(Worker-Ids | Where-Object { $Ids -contains $_ })
         if ($remaining.Count -eq 0) { return }
         if ([DateTime]::UtcNow -ge $deadline) { throw 'Previous Nginx workers have not drained; keeping both app slots' }
@@ -163,6 +182,7 @@ try {
     Write-Host "PULL: $image"
     $null = Invoke-Docker -Arguments @('manifest','inspect',$image)
     $null = Invoke-Docker -Arguments @('pull',$image)
+    Record-Deployment 'ImagePulled' @{image=$image;target_version=$version}
     # Pin this deployment to the pulled digest, not a subsequently mutable tag.
     $imageInfo = ((Invoke-Docker -Arguments @('image','inspect',$image) | Out-String) | ConvertFrom-Json)[0]
     $digest = @($imageInfo.RepoDigests | Where-Object { $_ -like "$ImageName@sha256:*" } | Select-Object -First 1)
@@ -172,10 +192,13 @@ try {
     $unused = Container $candidateName
     if ($unused) { Assert-Owned $unused; $null = Invoke-Docker -Arguments @('rm','-f',$candidateName) }
     $candidate = $candidateName
+    Assert-EvidenceMonitor
     $null = Invoke-Docker -Arguments @('run','-d','--name',$candidate,'--restart','unless-stopped','--network',$network,'--label',"$containerLabel=$Repository",'--label',"io.kakao.deploy.version=$version",$digest[0])
+    Record-Deployment 'CandidateCreated' @{slot=$slot;container=$candidate;image=$digest[0]}
     $healthCode = "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3); assert r.status==200; d=json.load(r); assert d.get('status')=='ok' and d.get('version')=='$version'"
     $successes = 0
     for ($attempt=1; $attempt -le 30; $attempt++) {
+        Assert-EvidenceMonitor
         $healthExit = 1
         try {
             & docker exec $candidate python -c $healthCode 2>$null
@@ -189,14 +212,18 @@ try {
     }
     if ($successes -lt $ReadySamples) { throw 'Candidate HTTP health/version readiness timed out' }
     Write-Host "READY: $candidate version=$version consecutive_checks=$successes"
+    Record-Deployment 'CandidateReady' @{slot=$slot;version=$version;checks=$successes}
     if (-not (Assert-Ci)) { throw 'Main changed during preparation; leaving current route unchanged' }
     $configFile = Write-Config $slot $version $CiRunNumber
+    Assert-EvidenceMonitor
     if ($currentProxy) {
         $workers = @(Worker-Ids)
         # Mark before mutation so even an interrupted reload command rolls back.
         $switched = $true
         Install-Config $proxy $configFile
+        Record-Deployment 'RouteSwitchRequested' @{from=$active;to=$slot;version=$version}
         $null = Invoke-Docker -Arguments @('exec',$proxy,'nginx','-s','reload','-c','/etc/nginx/managed/nginx.conf')
+        Record-Deployment 'RouteReloaded' @{slot=$slot;version=$version}
     } else {
         $null = Invoke-Docker -Arguments @('pull',$nginxImage)
         $helper = "kakao-config-$([guid]::NewGuid().ToString('N'))"
@@ -211,19 +238,27 @@ try {
     # Host-side readiness, followed by strict full probe and stability window.
     $ready = $false
     for ($attempt=0; $attempt -lt 15; $attempt++) {
+        Assert-EvidenceMonitor
         try { Health $version; $ready=$true; break } catch { Start-Sleep -Seconds 1 }
     }
     if (-not $ready) { throw 'Proxy did not route to expected version' }
     Probe-Proxy $version
+    Record-Deployment 'ProxyVerified' @{slot=$slot;version=$version}
     $until = [DateTime]::UtcNow.AddSeconds($StabilizeSeconds)
-    do { Health $version; Start-Sleep -Seconds 2 } while ([DateTime]::UtcNow -lt $until)
+    do { Assert-EvidenceMonitor; Health $version; Start-Sleep -Seconds 2 } while ([DateTime]::UtcNow -lt $until)
     if ($workers.Count -gt 0) { Wait-Drain $workers }
+    Record-Deployment 'RoutingAndDrainComplete' @{slot=$slot;version=$version}
+    if ($PostSwitchValidation) { $null = & $PostSwitchValidation $ValidationContext }
+    Assert-EvidenceMonitor
     Save-State $slot $version $CiRunNumber
+    Record-Deployment 'DeploymentCompleted' @{slot=$slot;version=$version;image=$digest[0]}
     Write-Host "DEPLOYED: slot=$slot version=$version image=$($digest[0]); prior app retained for rollback"
 } catch {
     $failure = $_
     Write-Warning "DEPLOYMENT FAILED: $($failure.Exception.Message)"
+    Record-Deployment 'DeploymentFailed' @{reason=$failure.Exception.Message}
     if ($switched -and $oldConfig) {
+        Record-Deployment 'RollbackStarted' @{version=$oldVersion;reason=$failure.Exception.Message}
         try {
             $file = Join-Path $StateDirectory 'rollback.conf'
             [IO.File]::WriteAllText($file,$oldConfig,(New-Object Text.UTF8Encoding($false)))
@@ -236,7 +271,8 @@ try {
             if (-not $restored) { throw 'Old proxy version did not recover' }
             Save-State $active $oldVersion $oldRun
             Write-Warning "ROLLED BACK: $active $oldVersion"
-        } catch { Write-Warning "ROLLBACK FAILED: $($_.Exception.Message). Keeping both app containers for recovery." }
+            Record-Deployment 'RollbackSucceeded' @{slot=$active;version=$oldVersion}
+        } catch { Record-Deployment 'RollbackFailed' @{reason=$_.Exception.Message}; Write-Warning "ROLLBACK FAILED: $($_.Exception.Message). Keeping both app containers for recovery." }
     }
     foreach ($name in @($candidate,$proxy)) {
         if ($name) {

@@ -31,6 +31,20 @@ class ServiceTests(unittest.TestCase):
     def test_session_threshold(self):
         self.assertEqual(analyze(SAMPLE, 60)['sessions'], 1)
 
+    def test_busiest_weekday_single_and_ties(self):
+        self.assertEqual(analyze(SAMPLE)['busiest_weekday'], {
+            'weekday_indexes': [3], 'labels': ['목요일'], 'message_count': 4, 'ratio': 100.0})
+        tied = analyze('2026. 11. 8. 09:00, SyntheticA : hello\n'
+                       '2026. 11. 9. 09:00, SyntheticB : friend')
+        self.assertEqual(tied['busiest_weekday'], {
+            'weekday_indexes': [0, 6], 'labels': ['월요일', '일요일'],
+            'message_count': 1, 'ratio': 50.0})
+        result = analyze('2026. 11. 8. 09:00, SyntheticA : hello\n'
+                         '2026. 11. 8. 09:01, SyntheticB : friend\n'
+                         '2026. 11. 9. 09:00, SyntheticB : again')
+        self.assertEqual(result['busiest_weekday']['ratio'], 66.67)
+        self.assertEqual(result['busiest_weekday']['weekday_indexes'], [6])
+
     def test_mobile_and_midnight(self):
         result = analyze('2026. 10. 1. 오전 12:00, 가상하늘 : 안녕\n2026년 10월 1일 오후 12:01, 가상바다 : 반가워')
         self.assertEqual(result['start'], '2026-10-01T00:00:00')

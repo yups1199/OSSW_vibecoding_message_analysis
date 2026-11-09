@@ -19,6 +19,17 @@ $global:KakaoMock_oldToken = $env:GITHUB_TOKEN
 $env:GITHUB_TOKEN = 'synthetic-test-value-not-a-credential'
 
 function Assert($condition,[string]$message) { if (-not $condition) { throw "TEST FAILED: $message" } }
+# Isolate the initial-port check as well: the real service may own port 8000.
+function New-Object {
+    param([string]$TypeName,[object[]]$ArgumentList)
+    if ($TypeName -eq 'Net.Sockets.TcpListener') {
+        $listener=[pscustomobject]@{}
+        $listener|Add-Member -MemberType ScriptMethod -Name Start -Value { }
+        $listener|Add-Member -MemberType ScriptMethod -Name Stop -Value { }
+        return $listener
+    }
+    Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+}
 function Start-Sleep { param([int]$Seconds); [Threading.Thread]::Sleep(5) }
 function Invoke-RestMethod {
     param($Uri,$Headers,$TimeoutSec)
@@ -32,7 +43,7 @@ function Invoke-WebRequest {
     param($Uri,[switch]$UseBasicParsing,$TimeoutSec,[switch]$DisableKeepAlive,$Method,$Body,$ContentType)
     if ($Uri -like '*/health') { return @{StatusCode=200;Content=(@{status='ok';version=$global:KakaoMock_routed}|ConvertTo-Json -Compress)} }
     if ($global:KakaoMock_mode -eq 'proxy-failure') { $global:KakaoMock_mode=''; throw 'Synthetic post-switch proxy failure' }
-    if ($Uri -like '*/api/analyze') { return @{StatusCode=200;Content='{"total":2,"participant_count":2}'} }
+    if ($Uri -like '*/api/analyze') { return @{StatusCode=200;Content='{"total":2,"participant_count":2,"busiest_weekday":{"message_count":2,"weekday_indexes":[6],"ratio":100}}'} }
     return @{StatusCode=200;Content='synthetic'}
 }
 function docker {
@@ -105,7 +116,7 @@ function Deploy([int]$Number,[string]$Digit,[string]$Failure='') {
     $global:KakaoMock_runNumber=$Number
     $global:KakaoMock_sha=$Digit*40
     $global:KakaoMock_mode=$Failure
-    & (Join-Path $PSScriptRoot 'Deploy.ps1') -Repository $global:KakaoMock_repo -CommitSha $global:KakaoMock_sha -CiRunId $Number -CiRunNumber $Number -ImageName $global:KakaoMock_images -StateDirectory $global:KakaoMock_state -ReadySamples 1 -StabilizeSeconds 1
+    & (Join-Path $PSScriptRoot 'Deploy.ps1') -Repository $global:KakaoMock_repo -CommitSha $global:KakaoMock_sha -CiRunId $Number -CiRunNumber $Number -ImageName $global:KakaoMock_images -StateDirectory $global:KakaoMock_state -ReadySamples 1 -StabilizeSeconds 1 -PostSwitchValidation { if ($global:KakaoMock_mode -eq 'observation-failure') { throw 'Synthetic independent observation gate failure' } }
 }
 try {
     Deploy 1 '1'
@@ -115,7 +126,7 @@ try {
     Assert ($global:KakaoMock_routed -eq ('sha-'+('2'*40))) 'green switch'
     Assert ($global:KakaoMock_containers['kakao-chat-proxy'].Id -eq $proxyId) 'proxy not recreated'
     Assert ($global:KakaoMock_containers.ContainsKey('kakao-chat-blue')) 'prior app retained'
-    foreach ($failure in @('pull-failure','candidate-failure','config-failure','proxy-failure')) {
+    foreach ($failure in @('pull-failure','candidate-failure','config-failure','proxy-failure','observation-failure')) {
         $failed=$false
         try { Deploy 3 '3' $failure } catch { $failed=$true }
         Assert $failed "$failure reports failure"
